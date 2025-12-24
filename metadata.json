@@ -1,0 +1,5 @@
+{
+  "name": "Supabase Friend & Task Explorer",
+  "description": "A modern dashboard to visualize data from Supabase, featuring AI-powered insights using Gemini to analyze secrets and task lists.",
+  "requestFramePermissions": []
+}
