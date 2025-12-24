@@ -1,101 +1,102 @@
 
-import { Friend, Task } from '../types';
+import { createClient } from '@supabase/supabase-js';
+import { Friend } from '../types';
 
 /**
- * Replicating the SupabaseService logic from C# to JS/TS.
+ * Utilizando import.meta.env para conformidade total com o padrão Vite e requisitos de produção.
+ * As variáveis são lidas em tempo de execução e o client é inicializado condicionalmente
+ * para evitar erros fatais em ambientes de preview como o AI Studio.
  */
-export class SupabaseService {
-  private readonly url = "https://hbnazrzohiatgzyfzofm.supabase.co";
-  private readonly key = "sb_publishable_CWnV65E5zOAVxXYanQFI_Q_-1gbTGbt";
+// Fixed: Cast import.meta to any to avoid "Property 'env' does not exist on type 'ImportMeta'"
+const env =
+  typeof import.meta !== "undefined" &&
+  (import.meta as any).env
+    ? (import.meta as any).env
+    : {};
 
-  private get headers() {
-    return {
-      'apikey': this.key,
-      'Authorization': `Bearer ${this.key}`,
-      'Content-Type': 'application/json',
-      'Prefer': 'return=minimal'
-    };
-  }
+const supabaseUrl = env.VITE_SUPABASE_URL;
+const supabaseAnonKey = env.VITE_SUPABASE_ANON_KEY;
 
+
+const isConfigured = !!(supabaseUrl && supabaseAnonKey);
+
+if (!isConfigured) {
+  console.warn("Supabase environment variables are missing (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY). Running in preview mode.");
+}
+
+// Inicializa o client apenas se as variáveis existirem, evitando o erro "supabaseUrl is required"
+const client = isConfigured ? createClient(supabaseUrl as string, supabaseAnonKey as string) : null;
+
+export const supabase = {
   /**
-   * Busca todos os amigos da tabela 'friends'
+   * Busca todos os amigos da tabela 'Friends' ou 'friends'.
+   * Retorna lista vazia se o Supabase não estiver configurado ou falhar, garantindo que o app não quebre.
    */
-  public async getFriends(): Promise<Friend[]> {
-    try {
-      const response = await fetch(`${this.url}/rest/v1/friends?select=*`, {
-        method: 'GET',
-        headers: {
-          'apikey': this.key,
-          'Authorization': `Bearer ${this.key}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch friends: ${response.statusText}`);
-      }
-
-      const data: Friend[] = await response.json();
-      return data;
-    } catch (error) {
-      console.error("Error in getFriends:", error);
+  async getFriends(): Promise<Friend[]> {
+    if (!client) {
+      console.warn("Supabase: Client não configurado. O app continuará com dados vazios no preview.");
       return [];
     }
-  }
+
+    try {
+      // Tenta primeiro a tabela capitalizada 'Friends'
+      const { data, error } = await client
+        .from('Friends')
+        .select('*');
+
+      if (error) {
+        // Fixed: Removed error.status check as it doesn't exist on PostgrestError.
+        // Relying on Postgres error code '42P01' (Relation does not exist).
+        if (error.code === '42P01') {
+          const { data: retryData, error: retryError } = await client
+            .from('friends')
+            .select('*');
+          if (retryError) throw retryError;
+          return (retryData as Friend[]) || [];
+        }
+        throw error;
+      }
+
+      return (data as Friend[]) || [];
+    } catch (error) {
+      console.error("Supabase: getFriends error", error);
+      return [];
+    }
+  },
 
   /**
-   * Atualiza os dados de um amigo (Persistência do Sorteio)
+   * Atualiza os dados de um amigo (Sorteio)
    */
-  public async updateFriend(id: number, data: any): Promise<boolean> {
-    try {
-      // Tentamos filtrar tanto por 'Id' quanto por 'id' caso um falhe
-      const response = await fetch(`${this.url}/rest/v1/friends?Id=eq.${id}`, {
-        method: 'PATCH',
-        headers: this.headers,
-        body: JSON.stringify(data),
-      });
+  async updateFriend(id: number, updateData: any): Promise<boolean> {
+    if (!client) {
+      console.warn("Supabase: Client não configurado. Falha ao salvar resultado do sorteio.");
+      return false;
+    }
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        console.error("Supabase Update Error Details:", {
-          status: response.status,
-          statusText: response.statusText,
-          details: errorData
-        });
+    try {
+      // Tenta atualizar na tabela Friends primeiro
+      const { error } = await client
+        .from('Friends')
+        .update(updateData)
+        .or(`Id.eq.${id},id.eq.${id}`);
+
+      if (error) {
+        // Fallback para tabela em minúsculo
+        const { error: retryError } = await client
+          .from('friends')
+          .update(updateData)
+          .or(`Id.eq.${id},id.eq.${id}`);
         
-        // Se falhou por causa do nome da coluna 'Id', tentamos 'id' (minúsculo)
-        if (response.status === 400 || response.status === 404) {
-             const retryResponse = await fetch(`${this.url}/rest/v1/friends?id=eq.${id}`, {
-                method: 'PATCH',
-                headers: this.headers,
-                body: JSON.stringify(data),
-              });
-             return retryResponse.ok;
+        if (retryError) {
+          console.error("Supabase: updateFriend error", retryError);
+          return false;
         }
       }
 
-      return response.ok;
+      return true;
     } catch (error) {
-      console.error("Network or parsing error in updateFriend:", error);
+      console.error("Supabase: updateFriend exception", error);
       return false;
     }
   }
-
-  public async getTasks(): Promise<Task[]> {
-    try {
-      const response = await fetch(`${this.url}/rest/v1/tarefas?select=*`, {
-        method: 'GET',
-        headers: {
-          'apikey': this.key,
-          'Authorization': `Bearer ${this.key}`,
-        },
-      });
-      if (!response.ok) throw new Error(`Failed to fetch tasks`);
-      return await response.json();
-    } catch (error) {
-      console.error("Error in getTasks:", error);
-      return [];
-    }
-  }
-}
-
-export const supabase = new SupabaseService();
+};
