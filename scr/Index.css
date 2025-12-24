@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* fallback para não ficar tudo preto se algo falhar */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
